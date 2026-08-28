@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF参照 RAGチャット デモ | OKZAQ</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --card: #ffffff; --ink: #1f2937; --sub: #6b7280;
+    --accent: #7c3aed; --accent-soft: #ede9fe; --border: #e5e7eb;
+    --user: #ddd6fe; --warn-soft: #fef3c7; --warn: #b45309;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+         background: var(--bg); color: var(--ink); line-height: 1.7; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  header h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .badge { display: inline-block; font-size: .72rem; padding: 2px 10px; border-radius: 999px;
+           background: var(--accent-soft); color: var(--accent); font-weight: 600; vertical-align: middle; }
+  .disclaimer { font-size: .82rem; color: var(--sub); margin: 6px 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+          padding: 16px 18px; margin-bottom: 16px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip { font-size: .78rem; padding: 3px 12px; border-radius: 999px;
+          background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .chip.uploaded { background: var(--warn-soft); color: var(--warn); }
+  .file-label { cursor: pointer; font-size: .78rem; padding: 3px 12px; border-radius: 999px;
+                border: 1.5px dashed var(--accent); color: var(--accent); font-weight: 600; }
+  #chat { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+  .msg { max-width: 88%; padding: 10px 14px; border-radius: 12px; font-size: .92rem; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--user); }
+  .msg.bot { align-self: flex-start; background: var(--card); border: 1px solid var(--border); }
+  .sources { align-self: flex-start; max-width: 88%; font-size: .78rem; color: var(--sub); }
+  .sources details { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
+  .sources li { margin-bottom: 4px; }
+  .sources .loc { font-weight: 600; color: var(--ink); }
+  form { display: flex; gap: 8px; }
+  input[type=text] { flex: 1; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px;
+                     font-size: .95rem; }
+  input[type=text]:focus { outline: none; border-color: var(--accent); }
+  button { cursor: pointer; border: none; border-radius: 10px; padding: 10px 20px;
+           font-size: .92rem; font-weight: 700; background: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .samples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .samples button { background: #fff; color: var(--accent); border: 1.5px solid var(--accent);
+                    font-weight: 600; font-size: .8rem; padding: 6px 12px; }
+  .error { background: #fee2e2; color: #b91c1c; padding: 10px 14px; border-radius: 8px;
+           font-size: .88rem; margin-bottom: 12px; }
+  .hidden { display: none; }
+  footer { font-size: .78rem; color: var(--sub); text-align: center; margin-top: 40px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>PDF参照 RAGチャット <span class="badge">自主制作デモ</span></h1>
+    <p class="disclaimer">
+      架空の製品マニュアル・FAQを知識源に、出典付きで回答するRAG（検索拡張生成）チャットの自主制作デモです
+      （実案件の納品物ではありません）。手元のPDFを追加して試すこともできます。
+      制作: <a href="https://github.com/okzaq" target="_blank" rel="noopener">OKZAQ</a>
+    </p>
+  </header>
+
+  <div class="card">
+    <div class="chips" id="docs">
+      <span style="font-size:.8rem;color:var(--sub)">知識源:</span>
+    </div>
+  </div>
+
+  <div id="error" class="error hidden"></div>
+  <div id="chat"></div>
+
+  <div class="card">
+    <form id="ask-form">
+      <input type="text" id="question" maxlength="500"
+             placeholder="ドキュメントについて質問してください" autocomplete="off">
+      <button type="submit" id="btn-ask">質問する</button>
+    </form>
+    <div class="samples">
+      <button type="button" data-q="解約はいつまでに申請すればいいですか？">解約の期限は？</button>
+      <button type="button" data-q="商品マスタのCSV取り込みの上限を教えてください">CSV取込の上限は？</button>
+      <button type="button" data-q="無断キャンセルを繰り返すとどうなりますか？">無断キャンセルのペナルティは？</button>
+      <button type="button" data-q="予約成立時の手数料はいくらですか？">予約の手数料は？</button>
+    </div>
+  </div>
+
+  <footer>
+    自主制作ポートフォリオ（架空ドキュメント使用）/ FastAPI + BM25検索 + Claude API /
+    <a href="https://github.com/okzaq/demo-rag-chat" target="_blank" rel="noopener">ソースコード</a>
+  </footer>
+</div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+let extraChunks = [];   // アップロードPDFのチャンク（クライアント側で保持するステートレス設計）
+
+async function loadDocs() {
+  const res = await fetch("/api/docs");
+  const docs = await res.json();
+  for (const d of docs) {
+    $("#docs").insertAdjacentHTML("beforeend",
+      `<span class="chip">${esc(d.doc)}（${d.chunks}チャンク）</span>`);
+  }
+  $("#docs").insertAdjacentHTML("beforeend",
+    `<label class="file-label">+ PDFを追加<input type="file" id="pdf-input" accept=".pdf" hidden></label>`);
+  $("#pdf-input").onchange = uploadPdf;
+}
+
+async function uploadPdf(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  showError("");
+  try {
+    const res = await fetch("/api/upload-pdf", { method: "POST", body: form });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || "アップロードに失敗しました");
+    extraChunks = extraChunks.concat(body.chunks);
+    $("#docs").querySelector(".file-label").insertAdjacentHTML("beforebegin",
+      `<span class="chip uploaded">${esc(body.doc)}（${body.chunks.length}チャンク）</span>`);
+  } catch (err) {
+    showError(err.message);
+  }
+  e.target.value = "";
+}
+
+$("#ask-form").onsubmit = (e) => { e.preventDefault(); ask($("#question").value.trim()); };
+document.querySelectorAll(".samples button").forEach(b => b.onclick = () => ask(b.dataset.q));
+
+async function ask(question) {
+  if (!question) return;
+  $("#btn-ask").disabled = true;
+  showError("");
+  addMsg("user", question);
+  $("#question").value = "";
+  const thinking = addMsg("bot", "検索して回答を生成しています…");
+  try {
+    const res = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, extra_chunks: extraChunks }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || "エラーが発生しました");
+    thinking.textContent = body.answer;
+    if (body.sources.length) {
+      const items = body.sources.map(s =>
+        `<li>【${s.ref}】<span class="loc">${esc(s.doc)} / ${esc(s.location)}</span>
+         （関連度 ${s.score}）<br>${esc(s.snippet)}…</li>`).join("");
+      thinking.insertAdjacentHTML("afterend",
+        `<div class="sources"><details><summary>参照した抜粋（${body.sources.length}件）</summary><ol>${items}</ol></details></div>`);
+    }
+  } catch (err) {
+    thinking.remove();
+    showError(err.message);
+  } finally {
+    $("#btn-ask").disabled = false;
+  }
+}
+
+function addMsg(role, text) {
+  const div = document.createElement("div");
+  div.className = `msg ${role}`;
+  div.textContent = text;
+  $("#chat").appendChild(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+  return div;
+}
+
+function showError(message) {
+  $("#error").textContent = message;
+  $("#error").classList.toggle("hidden", !message);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+loadDocs();
+</script>
+</body>
+</html>
