@@ -51,7 +51,12 @@ def generate_answer(question: str, hits: list[tuple[Chunk, float]]) -> tuple[str
             False,
         )
 
-    client = anthropic.Anthropic()
+    # IDリンク型APIキーは anthropic-workspace-id ヘッダーが必須のため、
+    # 環境変数 ANTHROPIC_WORKSPACE_ID があれば付与する
+    workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID", "")
+    client = anthropic.Anthropic(
+        default_headers={"anthropic-workspace-id": workspace_id} if workspace_id else None,
+    )
     response = client.messages.create(
         model=MODEL,
         max_tokens=2000,
